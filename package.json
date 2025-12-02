@@ -1,6 +1,6 @@
 {
   "name": "@yilin-jing/mcp-json-utils",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "JSON response utilities for MCP servers - formatting, limiting, and saving responses",
   "author": "yilin",
   "license": "MIT",
