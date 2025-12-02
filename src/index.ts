@@ -6,8 +6,10 @@ import { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
  * Configuration for JSON response handling
  */
 export interface JsonResponseConfig {
-  maxItemsForContext: number;
+  maxItemsForContext?: number; // Default: 3
 }
+
+const DEFAULT_MAX_ITEMS = 3;
 
 /**
  * Options for formatting responses
@@ -16,6 +18,7 @@ export interface FormatResponseOptions {
   rawDataSaveDir?: string;
   toolName?: string;
   params?: Record<string, any>;
+  maxItems?: number; // Override maxItemsForContext for this call
 }
 
 /**
@@ -50,10 +53,12 @@ export interface SaveRawDataResult {
  * Utility class for handling JSON data in MCP responses
  */
 export class JsonResponseHandler {
-  private config: JsonResponseConfig;
+  private config: Required<JsonResponseConfig>;
 
-  constructor(config: JsonResponseConfig) {
-    this.config = config;
+  constructor(config: JsonResponseConfig = {}) {
+    this.config = {
+      maxItemsForContext: config.maxItemsForContext ?? DEFAULT_MAX_ITEMS,
+    };
   }
 
   /**
@@ -104,15 +109,16 @@ export class JsonResponseHandler {
   }
 
   /**
-   * Find the first array field in the data that has more than maxItemsForContext items
+   * Find the first array field in the data that has more than maxItems items
    * Returns the field path and the array
    */
-  findLargeArrayField(data: any, pathStr: string = ''): LargeArrayFieldResult | null {
+  findLargeArrayField(data: any, pathStr: string = '', maxItems?: number): LargeArrayFieldResult | null {
+    const limit = maxItems ?? this.config.maxItemsForContext;
     if (!data || typeof data !== 'object') return null;
 
     // If data itself is an array with >maxItems items
     if (Array.isArray(data)) {
-      if (data.length > this.config.maxItemsForContext) {
+      if (data.length > limit) {
         return { fieldPath: pathStr || '(root)', array: data, parentObj: null, fieldKey: '' };
       }
       return null;
@@ -124,13 +130,13 @@ export class JsonResponseHandler {
       const currentPath = pathStr ? `${pathStr}.${key}` : key;
 
       // Check if this field is an array with >maxItems items
-      if (Array.isArray(value) && value.length > this.config.maxItemsForContext) {
+      if (Array.isArray(value) && value.length > limit) {
         return { fieldPath: currentPath, array: value, parentObj: data, fieldKey: key };
       }
 
       // Recursively search nested objects (but not arrays)
       if (value && typeof value === 'object' && !Array.isArray(value)) {
-        const found = this.findLargeArrayField(value, currentPath);
+        const found = this.findLargeArrayField(value, currentPath, maxItems);
         if (found) return found;
       }
     }
@@ -139,15 +145,16 @@ export class JsonResponseHandler {
   }
 
   /**
-   * Limit items in the response to maxItemsForContext
+   * Limit items in the response to maxItems
    * Dynamically finds which field contains >maxItems items and limits that field
    * Returns the limited data, the original count, field path, and whether it was limited
    */
-  limitItems(data: any): LimitItemsResult {
+  limitItems(data: any, maxItems?: number): LimitItemsResult {
+    const limit = maxItems ?? this.config.maxItemsForContext;
     if (!data) return { limited: data, originalCount: 0, wasLimited: false, limitedField: null };
 
     // Find the first array field with >maxItems items
-    const largeArrayInfo = this.findLargeArrayField(data);
+    const largeArrayInfo = this.findLargeArrayField(data, '', maxItems);
 
     if (!largeArrayInfo) {
       // No large arrays found
@@ -160,7 +167,7 @@ export class JsonResponseHandler {
     // If root is the array
     if (parentObj === null) {
       return {
-        limited: data.slice(0, this.config.maxItemsForContext),
+        limited: data.slice(0, limit),
         originalCount,
         wasLimited: true,
         limitedField: fieldPath,
@@ -177,7 +184,7 @@ export class JsonResponseHandler {
       target = target[pathParts[i]];
     }
     const lastKey = pathParts[pathParts.length - 1];
-    target[lastKey] = array.slice(0, this.config.maxItemsForContext);
+    target[lastKey] = array.slice(0, limit);
 
     return {
       limited: limitedData,
@@ -257,6 +264,7 @@ export class JsonResponseHandler {
    * Format response as markdown for better agent readability
    */
   formatResponse(data: any, options?: FormatResponseOptions): CallToolResult {
+    const maxItems = options?.maxItems ?? this.config.maxItemsForContext;
     let savedFileInfo: SaveRawDataResult | undefined;
 
     // Save raw data if directory is specified (always save full data)
@@ -265,7 +273,7 @@ export class JsonResponseHandler {
     }
 
     // Limit items for agent context (dynamically finds which field has >maxItems items)
-    const { limited, originalCount, wasLimited, limitedField } = this.limitItems(data);
+    const { limited, originalCount, wasLimited, limitedField } = this.limitItems(data, maxItems);
 
     // Build markdown response
     const lines: string[] = [];
@@ -281,7 +289,7 @@ export class JsonResponseHandler {
 
     // Show limitation info if items were limited
     if (wasLimited && limitedField) {
-      lines.push(`> **Note**: \`${limitedField}\` limited to ${this.config.maxItemsForContext} items (${originalCount} total). ${savedFileInfo ? 'Full data saved to file.' : 'Provide `raw_data_save_dir` parameter to save full response.'}`);
+      lines.push(`> **Note**: \`${limitedField}\` limited to ${maxItems} items (${originalCount} total). ${savedFileInfo ? 'Full data saved to file.' : 'Provide `raw_data_save_dir` parameter to save full response.'}`);
       lines.push('');
     }
 
@@ -294,7 +302,7 @@ export class JsonResponseHandler {
 
     // Show data section header with item count info
     if (wasLimited) {
-      lines.push(`### Data (\`${limitedField}\`: ${this.config.maxItemsForContext}/${originalCount} items)`);
+      lines.push(`### Data (\`${limitedField}\`: ${maxItems}/${originalCount} items)`);
     } else {
       lines.push('### Data');
     }
